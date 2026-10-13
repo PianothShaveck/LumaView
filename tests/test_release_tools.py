@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 from zipfile import ZipFile
 
 import pytest
@@ -62,8 +63,8 @@ def test_archives_exclude_private_files_and_keep_installer_executable(tmp_path):
 
 @pytest.fixture
 def publisher(tmp_path):
-    if not shutil.which('git') or not shutil.which('rsync'):
-        pytest.skip('Publication integration tests require git and rsync.')
+    if not all(shutil.which(tool) for tool in ('git', 'rsync', 'jq')):
+        pytest.skip('Publication integration tests require git, rsync and jq.')
     source = source_tree(tmp_path / 'source')
     shutil.copy2(ROOT / 'scripts/publish_github.sh', source / 'scripts/publish_github.sh')
     env = dict(os.environ, GIT_AUTHOR_NAME='Release test', GIT_AUTHOR_EMAIL='test@example.invalid',
@@ -83,24 +84,71 @@ def publisher(tmp_path):
     commands = tmp_path / 'commands'
     commands.mkdir()
     mock = commands / 'gh'
-    mock.write_text('''#!/bin/bash
-set -eu
-case "$1 $2" in
-  'auth status') exit 0 ;;
-  'repo view') echo test/LumaView ;;
-  'repo clone') git clone "$LUMAVIEW_TEST_REMOTE" "$4" ;;
-  'repo edit') exit 0 ;;
-  'run list') echo 123 ;;
-  'run watch') exit "${LUMAVIEW_TEST_BUILD_EXIT:-0}" ;;
-  'release view')
-    if [[ "$*" == *'--json assets'* ]]; then
-      printf '%s\\n' LumaView-0.1.2-macos-arm64.dmg LumaView-0.1.2-macos-arm64.zip LumaView-0.1.2-installer.zip LumaView-0.1.2-github.zip LumaView-Guide.pdf SHA256SUMS.txt
-    else echo true; fi ;;
-  'release edit') printf '%s\\n' "$*" >> "$LUMAVIEW_TEST_PUBLISHED" ;;
-  *) echo "Unexpected GitHub command: $*" >&2; exit 1 ;;
-esac
+    mock.write_text('#!' + sys.executable + '\n' + '''
+import json, os, subprocess, sys
+from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
+args = sys.argv[1:]
+env = os.environ
+state = Path(env['LUMAVIEW_TEST_PUBLISHED']).parent
+command = args[:2]
+if command == ['auth', 'status']:
+    pass
+elif command == ['repo', 'view']:
+    print('test/LumaView')
+elif command == ['repo', 'clone']:
+    subprocess.run(['git', 'clone', env['LUMAVIEW_TEST_REMOTE'], args[3]], check=True)
+elif command == ['repo', 'edit']:
+    pass
+elif args[0] == 'api':
+    code = int(env.get('LUMAVIEW_TEST_API_EXIT', '0'))
+    if code:
+        print('GitHub API unavailable', file=sys.stderr)
+        sys.exit(code)
+    endpoint = urlsplit(args[1])
+    assert endpoint.path == 'repos/test/LumaView/actions/runs', args
+    sha = parse_qs(endpoint.query)['head_sha'][0]
+    def record(run_id, path='.github/workflows/release.yml', branch='v0.1.2', head=sha, event='push'):
+        return dict(id=run_id, path=path, head_branch=branch, head_sha=head, event=event)
+    # Higher IDs deliberately belong to the wrong workflow, ref or commit.
+    runs = [record(9999, path='.github/workflows/tests.yml'),
+            record(9998, branch='main', event='workflow_dispatch'),
+            record(9997, head='0' * 40)]
+    mode = env.get('LUMAVIEW_TEST_RUN_MODE', 'push')
+    dispatched = (state / 'dispatched').exists()
+    if mode == 'push' or (mode == 'dispatch' and dispatched):
+        runs.append(record(123, event='workflow_dispatch' if dispatched else 'push'))
+    query = args[args.index('--jq') + 1]
+    subprocess.run(['jq', '-r', query], input=json.dumps({'workflow_runs': runs}), text=True, check=True)
+elif command == ['workflow', 'run']:
+    assert args[2] == 'release.yml' and args[args.index('--ref') + 1] == 'v0.1.2', args
+    code = int(env.get('LUMAVIEW_TEST_DISPATCH_EXIT', '0'))
+    if code:
+        sys.exit(code)
+    (state / 'dispatched').write_text(' '.join(args))
+elif command == ['run', 'watch']:
+    assert args[2] == '123', args
+    sys.exit(int(env.get('LUMAVIEW_TEST_BUILD_EXIT', '0')))
+elif command == ['release', 'view']:
+    if args[args.index('--json') + 1] == 'assets':
+        assets = ['LumaView-0.1.2-macos-arm64.dmg', 'LumaView-0.1.2-macos-arm64.zip',
+                  'LumaView-0.1.2-installer.zip', 'LumaView-0.1.2-github.zip',
+                  'LumaView-Guide.pdf', 'SHA256SUMS.txt']
+        for asset in assets:
+            if asset != env.get('LUMAVIEW_TEST_MISSING_ASSET'):
+                print(asset)
+    else:
+        print('true')
+elif command == ['release', 'edit']:
+    with Path(env['LUMAVIEW_TEST_PUBLISHED']).open('a') as output:
+        print(' '.join(args), file=output)
+else:
+    raise AssertionError('Unexpected GitHub command: ' + repr(args))
 ''')
     mock.chmod(0o755)
+    # Exercise bounded polling without spending real time waiting for a mock service.
+    (commands / 'sleep').write_text('#!/bin/sh\nexit 0\n')
+    (commands / 'sleep').chmod(0o755)
     env.update(PATH=str(commands) + os.pathsep + env['PATH'], LUMAVIEW_TEST_REMOTE=str(remote),
                LUMAVIEW_PUBLISH_ROOT=str(tmp_path / 'publish'),
                LUMAVIEW_TEST_PUBLISHED=str(tmp_path / 'published'))
@@ -141,4 +189,44 @@ def test_failed_build_does_not_publish(publisher):
     publisher[3]['LUMAVIEW_TEST_BUILD_EXIT'] = '1'
     result = publish(publisher)
     assert result.returncode != 0 and 'Build failed' in result.stdout
+    assert not Path(publisher[3]['LUMAVIEW_TEST_PUBLISHED']).exists()
+
+
+def test_missing_tag_event_dispatches_release_on_the_same_tag(publisher):
+    publisher[3]['LUMAVIEW_TEST_RUN_MODE'] = 'dispatch'
+    result = publish(publisher)
+    assert result.returncode == 0, result.stdout
+    published = Path(publisher[3]['LUMAVIEW_TEST_PUBLISHED'])
+    assert published.exists()
+    assert (published.parent / 'dispatched').exists()
+
+
+def test_missing_dispatched_run_stops_without_publishing(publisher):
+    publisher[3]['LUMAVIEW_TEST_RUN_MODE'] = 'never'
+    result = publish(publisher)
+    assert result.returncode != 0 and 'requested release workflow did not appear' in result.stdout
+    assert not Path(publisher[3]['LUMAVIEW_TEST_PUBLISHED']).exists()
+
+
+def test_api_error_is_not_mistaken_for_a_missing_run(publisher):
+    publisher[3]['LUMAVIEW_TEST_API_EXIT'] = '1'
+    result = publish(publisher)
+    assert result.returncode != 0 and 'Could not query GitHub Actions' in result.stdout
+    published = Path(publisher[3]['LUMAVIEW_TEST_PUBLISHED'])
+    assert not published.exists()
+    assert not (published.parent / 'dispatched').exists()
+
+
+def test_dispatch_error_stops_without_publishing(publisher):
+    publisher[3]['LUMAVIEW_TEST_RUN_MODE'] = 'dispatch'
+    publisher[3]['LUMAVIEW_TEST_DISPATCH_EXIT'] = '1'
+    result = publish(publisher)
+    assert result.returncode != 0 and 'Could not start the release workflow' in result.stdout
+    assert not Path(publisher[3]['LUMAVIEW_TEST_PUBLISHED']).exists()
+
+
+def test_incomplete_assets_do_not_publish(publisher):
+    publisher[3]['LUMAVIEW_TEST_MISSING_ASSET'] = 'LumaView-0.1.2-macos-arm64.dmg'
+    result = publish(publisher)
+    assert result.returncode != 0 and 'Missing release asset' in result.stdout
     assert not Path(publisher[3]['LUMAVIEW_TEST_PUBLISHED']).exists()

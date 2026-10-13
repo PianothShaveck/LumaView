@@ -23,7 +23,8 @@ class BatchWindowTests(unittest.TestCase):
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.folder = Path(self.temp.name)
+        # macOS exposes its temporary directory through the /var -> /private/var link.
+        self.folder = Path(self.temp.name).resolve()
         settings = QSettings(str(self.folder / "settings.ini"), QSettings.Format.IniFormat)
         with patch('lumaview.ui.batch_window.QSettings',return_value=settings):
             self.window = BatchWindow()
@@ -65,6 +66,13 @@ class BatchWindowTests(unittest.TestCase):
         self.assertEqual(self.window._paths(), [paths[1], paths[2], paths[0], paths[3]])
         self.window._move(1)
         self.assertEqual(self.window._paths(), paths)
+
+    def test_queue_deduplicates_paths_through_directory_symlinks(self):
+        source = self._image("image.png")
+        alias = self.folder / "alias"
+        alias.symlink_to(self.folder, target_is_directory=True)
+        self.window.add_paths([source, alias / source.name])
+        self.assertEqual(self.window._paths(), [source])
 
     def test_dangerous_options_and_pdf_password_are_never_persisted(self):
         self.window.advanced.update(overwrite=True, delete_originals=True, resize=True, width=300)

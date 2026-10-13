@@ -12,11 +12,13 @@ From a source archive, the helper below clones the existing repository into a ne
 bash scripts/publish_github.sh OWNER/REPOSITORY
 ```
 
-Requires `git`, `gh`, `rsync`, a configured Git author, an existing repository and GitHub CLI authentication with repository and workflow access. It does not force-push, overwrite a conflicting tag or replace a published release. It does not install the app on the machine running the command.
+The branch is pushed before the tag so that the workflows are present in newly created repositories. The helper finds the release run by workflow file, tag and commit. If no run appears, it starts `release.yml` explicitly on the same tag and waits for that build. API or permission errors stop with an explanation.
+
+Requires `git`, `gh`, `rsync`, a configured Git author, an existing repository and GitHub CLI authentication with repository and workflow access. It does not force-push, overwrite a conflicting tag or replace a published release. It does not install the app on the machine running the command. Corrections to a version already tagged should use a new patch version and new release notes.
 
 For an existing development checkout, commit the release changes and push the annotated tag manually. After the workflow succeeds, publish the draft on GitHub or with `gh release edit v<version> --draft=false --latest`.
 
-**Build macOS** can also run manually to produce downloadable workflow artifacts without creating a release. Native macOS UI testing, including Finder opening, permissions and printing, remains part of release review.
+**Build macOS** can also run manually: a branch build produces downloadable workflow artifacts; a version-tag build also creates the draft release. Native macOS UI testing, including Finder opening, permissions and printing, remains part of release review.
 
 ## Local build
 

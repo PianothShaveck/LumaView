@@ -16,7 +16,11 @@ LUMAVIEW_NAME="LumaView-$LUMAVIEW_VERSION-macos-arm64"
 
 # Ad-hoc signatures are required by arm64 macOS; they are not Developer ID signing.
 /usr/bin/codesign --verify --deep --strict "$LUMAVIEW_APP"
-/usr/bin/lipo "$LUMAVIEW_APP/Contents/MacOS/LumaView" -verify_arch arm64
+LUMAVIEW_BUILT_ARCHS="$(/usr/bin/lipo -archs "$LUMAVIEW_APP/Contents/MacOS/LumaView")"
+[ "$LUMAVIEW_BUILT_ARCHS" = arm64 ] || {
+    printf 'Expected an arm64 executable; found: %s\n' "$LUMAVIEW_BUILT_ARCHS" >&2
+    exit 1
+}
 QT_QPA_PLATFORM=offscreen "$LUMAVIEW_APP/Contents/MacOS/LumaView" --smoke-test
 
 LUMAVIEW_DMG_STAGE="$(mktemp -d "${TMPDIR:-/tmp}/lumaview-dmg.XXXXXX")"

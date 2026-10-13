@@ -63,18 +63,29 @@ fi
 
 LUMAVIEW_DESCRIPTION="Image viewer and batch converter for Apple Silicon Macs, inspired by IrfanView. Supports advanced resizing, format-specific export options, and adaptive monochrome TIFF conversion."
 gh repo edit "$LUMAVIEW_REPO" --description "$LUMAVIEW_DESCRIPTION"
-git push --atomic -u origin "$LUMAVIEW_BRANCH" "refs/tags/$LUMAVIEW_TAG"
+# Register the branch/workflows before sending the release tag on a new repository.
+git push -u origin "$LUMAVIEW_BRANCH"
+git push origin "refs/tags/$LUMAVIEW_TAG"
 
 printf '\nWaiting for the macOS release build…\n'
 LUMAVIEW_RUN=""
-for ((attempt=0; attempt<40; attempt++)); do
-    LUMAVIEW_RUN="$(gh run list --repo "$LUMAVIEW_REPO" \
-        --commit "$LUMAVIEW_COMMIT" --event push --limit 20 --json databaseId,workflowName \
-        --jq '[.[] | select(.workflowName == "Build macOS")][0].databaseId // empty')"
-    [ -z "$LUMAVIEW_RUN" ] || break
-    sleep 3
-done
-[ -n "$LUMAVIEW_RUN" ] || die "No release workflow appeared. Check https://github.com/$LUMAVIEW_REPO/actions. Sources and tag are already uploaded."
+LUMAVIEW_RUN_FILTER="[.workflow_runs[] | select(.path == \".github/workflows/release.yml\" and .head_branch == \"$LUMAVIEW_TAG\" and .head_sha == \"$LUMAVIEW_COMMIT\" and (.event == \"push\" or .event == \"workflow_dispatch\"))] | sort_by(.id) | last | .id // empty"
+wait_for_release_run() {
+    local attempt
+    for ((attempt=0; attempt<$1; attempt++)); do
+        LUMAVIEW_RUN="$(gh api "repos/$LUMAVIEW_REPO/actions/runs?head_sha=$LUMAVIEW_COMMIT&per_page=100" \
+            --jq "$LUMAVIEW_RUN_FILTER")" || die 'Could not query GitHub Actions. Check gh authentication and retry this script.'
+        [ -z "$LUMAVIEW_RUN" ] || return 0
+        sleep 3
+    done
+    return 1
+}
+if ! wait_for_release_run 20; then
+    printf '\nNo tag-triggered build found; starting the release workflow for %s…\n' "$LUMAVIEW_TAG"
+    gh workflow run release.yml --repo "$LUMAVIEW_REPO" --ref "$LUMAVIEW_TAG" || \
+        die "Could not start the release workflow. Check https://github.com/$LUMAVIEW_REPO/actions and retry this script."
+    wait_for_release_run 40 || die "The requested release workflow did not appear. Check https://github.com/$LUMAVIEW_REPO/actions. Sources and tag are already uploaded."
+fi
 if ! gh run watch "$LUMAVIEW_RUN" --repo "$LUMAVIEW_REPO" --exit-status; then
     die "Build failed; the release was not published. Logs: https://github.com/$LUMAVIEW_REPO/actions/runs/$LUMAVIEW_RUN"
 fi

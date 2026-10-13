@@ -47,7 +47,7 @@ jobs:
       - name: Tests
         run: python -m pytest
       - name: Check shell scripts
-        run: bash -n Install.command scripts/*.sh
+        run: for script in Install.command scripts/*.sh; do bash -n "$script" || exit; done
       - name: Build and verify app
         run: bash scripts/build_macos.sh
       - uses: actions/upload-artifact@v4

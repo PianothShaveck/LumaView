@@ -25,7 +25,9 @@ class ViewerTests(unittest.TestCase):
         cls.app=QApplication.instance() or QApplication([])
 
     def setUp(self):
-        self.temp=tempfile.TemporaryDirectory();self.folder=Path(self.temp.name)
+        self.temp=tempfile.TemporaryDirectory()
+        # Compare against the same canonical paths used by the viewer on macOS.
+        self.folder=Path(self.temp.name).resolve()
         self.window=ViewerWindow()
         self.window.settings=QSettings(str(self.folder/'settings.ini'),QSettings.Format.IniFormat)
         self.errors=[]
@@ -73,6 +75,16 @@ class ViewerTests(unittest.TestCase):
         self.window.operation(negative=True)
         with patch('lumaview.ui.viewer.QMessageBox.question',return_value=QMessageBox.StandardButton.Cancel):self.window.navigate(-1)
         self.assertEqual(self.window.doc.source,ten);self.assertTrue(self.window.dirty)
+
+    def test_navigation_deduplicates_paths_through_directory_symlinks(self):
+        first=self.image('image1.png');second=self.image('image2.png',color='blue')
+        alias=self.folder/'alias'
+        alias.symlink_to(self.folder,target_is_directory=True)
+        self.assertTrue(self.window.open_path(alias/first.name,[first,alias/first.name,alias/second.name]))
+        self.assertEqual(self.window.files,[first,second])
+        self.assertEqual(self.window.doc.source,first)
+        self.window.navigate(1)
+        self.assertEqual(self.window.doc.source,second)
 
     def test_paint_stroke_stops_animation_and_undo_restores_pixels(self):
         path=self.image(size=(80,60));self.window.open_path(path);self.window.show();self.app.processEvents()
