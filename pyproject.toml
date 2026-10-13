@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lumaview"
+version = "0.1.2"
+description = "An image viewer and batch converter for Apple Silicon Macs"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [{name = "LumaView contributors"}]
+dynamic = ["dependencies"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: MacOS X",
+    "Intended Audience :: End Users/Desktop",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Graphics :: Viewers",
+    "Topic :: Multimedia :: Graphics :: Graphics Conversion",
+]
+
+[project.gui-scripts]
+lumaview = "lumaview.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/PianothShaveck/LumaView"
+Issues = "https://github.com/PianothShaveck/LumaView/issues"
+Releases = "https://github.com/PianothShaveck/LumaView/releases"
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+[tool.setuptools.packages.find]
+include = ["lumaview*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

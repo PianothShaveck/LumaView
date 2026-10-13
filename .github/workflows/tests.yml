@@ -1,0 +1,48 @@
+name: Tests
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Install Linux Qt libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libopengl0 libxkbcommon0 libxcb-cursor0
+      - name: Install dependencies
+        run: |
+          python -m pip install --only-binary=:all: -r requirements-dev.txt
+      - name: Verify dependencies
+        run: python -m pip check
+      - name: Tests
+        run: python -m pytest
+      - name: Application smoke test
+        run: python -m lumaview --smoke-test
+      - name: Native OCR smoke test
+        if: runner.os == 'macOS'
+        run: |
+          python - <<'PY'
+          from PIL import Image, ImageDraw, ImageFont
+          from lumaview.native_macos import recognize_text
+          image = Image.new('RGB', (900, 150), 'white')
+          font = ImageFont.truetype('/System/Library/Fonts/Helvetica.ttc', 64)
+          ImageDraw.Draw(image).text((30, 25), 'LumaView 123', fill='black', font=font)
+          text = recognize_text(image)
+          assert '123' in text, repr(text)
+          PY
+      - name: Check shell syntax
+        run: bash -n Install.command scripts/*.sh

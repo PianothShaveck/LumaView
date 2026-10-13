@@ -1,0 +1,103 @@
+name: Build macOS
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYINSTALLER_STRICT_BUNDLE_CODESIGN_ERROR: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: arm64
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Verify native runner and release version
+        env:
+          RELEASE_REF_TYPE: ${{ github.ref_type }}
+          RELEASE_REF_NAME: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import ast, os, pathlib, platform, tomllib
+          assert platform.machine() == 'arm64', platform.machine()
+          tree = ast.parse(pathlib.Path('lumaview/__init__.py').read_text())
+          version = next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
+                         and any(isinstance(t, ast.Name) and t.id == '__version__' for t in n.targets))
+          assert tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'] == version
+          if os.environ['RELEASE_REF_TYPE'] == 'tag':
+              assert os.environ['RELEASE_REF_NAME'] == 'v' + version
+          assert pathlib.Path(f'docs/releases/v{version}.md').is_file()
+          print('Building LumaView', version, 'for', platform.machine())
+          PY
+      - name: Install dependencies
+        run: |
+          python -m pip install --only-binary=:all: -r requirements-dev.txt
+          python -m pip check
+      - name: Tests
+        run: python -m pytest
+      - name: Check shell scripts
+        run: bash -n Install.command scripts/*.sh
+      - name: Build and verify app
+        run: bash scripts/build_macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LumaView-macos-arm64
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/LumaView-Guide.pdf
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+  draft:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: macos
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: LumaView-macos-arm64
+          path: release
+      - name: Check downloaded assets
+        working-directory: release
+        run: sha256sum --check SHA256SUMS.txt
+      - name: Create or update draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          LUMAVIEW_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          notes="docs/releases/$LUMAVIEW_TAG.md"
+          version="${LUMAVIEW_TAG#v}"
+          files=("release/LumaView-$version-macos-arm64.dmg"
+                 "release/LumaView-$version-macos-arm64.zip"
+                 "release/LumaView-$version-installer.zip"
+                 "release/LumaView-$version-github.zip"
+                 "release/LumaView-Guide.pdf" "release/SHA256SUMS.txt")
+          for file in "${files[@]}"; do test -s "$file"; done
+          if draft=$(gh release view "$LUMAVIEW_TAG" --json isDraft --jq .isDraft); then
+            if [ "$draft" != true ]; then
+              echo "Release already published; no published assets were changed."
+              exit 0
+            fi
+            gh release upload "$LUMAVIEW_TAG" "${files[@]}" --clobber
+            gh release edit "$LUMAVIEW_TAG" --title "LumaView $version" --notes-file "$notes"
+          else
+            gh release create "$LUMAVIEW_TAG" "${files[@]}" --draft --verify-tag \
+              --title "LumaView $version" --notes-file "$notes"
+          fi
