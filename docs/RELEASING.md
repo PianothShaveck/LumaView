@@ -14,7 +14,11 @@ bash scripts/publish_github.sh OWNER/REPOSITORY
 
 The branch is pushed before the tag so that the workflows are present in newly created repositories. The helper finds the release run by workflow file, tag and commit. If no run appears, it starts `release.yml` explicitly on the same tag and waits for that build. API or permission errors stop with an explanation.
 
-Requires `git`, `gh`, `rsync`, a configured Git author, an existing repository and GitHub CLI authentication with repository and workflow access. It does not force-push, overwrite a conflicting tag or replace a published release. It does not install the app on the machine running the command. Corrections to a version already tagged should use a new patch version and new release notes.
+If live monitoring is interrupted by an API error, the helper checks the workflow's actual conclusion and retries monitoring. A failed status request is not reported as a failed build. Repeated monitoring errors stop publication with a link to the existing run; rerun the same unmodified source archive to resume once GitHub is reachable.
+
+Requires `git`, `gh`, `rsync`, a configured Git author, an existing repository and GitHub CLI authentication with repository and workflow access. By default it does not overwrite a conflicting tag. It does not replace a published release or install the app on the machine running the command.
+
+To explicitly rebuild an **unpublished draft** under the same version, run `bash scripts/publish_github.sh OWNER/REPOSITORY --replace-draft-tag`. The helper verifies that the existing release is a draft, advances the branch normally, and moves only the version tag with an explicit force-with-lease against its previously observed object ID. The new build replaces the draft downloads and is published only after success. Superseded builds refuse to upload their assets. Published releases require a new version.
 
 For an existing development checkout, commit the release changes and push the annotated tag manually. After the workflow succeeds, publish the draft on GitHub or with `gh release edit v<version> --draft=false --latest`.
 

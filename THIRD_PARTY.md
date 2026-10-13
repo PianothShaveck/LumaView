@@ -2,6 +2,8 @@
 
 LumaView does not contain IrfanView source code, plug-ins, icons, or branding. IrfanView is a separate product.
 
+The LumaView light-frame icon is project-specific vector artwork defined in `assets/lumaview.svg` and distributed under the project MIT license. PNG and ICNS files are rendered by `scripts/build_icon.py`; no external icon pack, font or stock image is embedded.
+
 The Python dependencies below are installed by the source installer and included in bundled releases. Their license notices remain applicable independently of LumaView's MIT license.
 
 | Component | Purpose | Project and license information |

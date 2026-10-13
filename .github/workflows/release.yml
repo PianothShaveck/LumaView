@@ -82,6 +82,12 @@ jobs:
           LUMAVIEW_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          # A superseded draft build must never overwrite a newer tag's assets.
+          git fetch --force origin "refs/tags/$LUMAVIEW_TAG:refs/tags/$LUMAVIEW_TAG"
+          if [ "$(git rev-list -n 1 "$LUMAVIEW_TAG")" != "$GITHUB_SHA" ]; then
+            echo 'This tag now points to a newer build; refusing to upload stale assets.'
+            exit 1
+          fi
           notes="docs/releases/$LUMAVIEW_TAG.md"
           version="${LUMAVIEW_TAG#v}"
           files=("release/LumaView-$version-macos-arm64.dmg"

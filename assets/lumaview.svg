@@ -1,1 +1,19 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024"><defs><linearGradient id="g" x2="1" y2="1"><stop stop-color="#3674ff"/><stop offset="1" stop-color="#153ea9"/></linearGradient></defs><rect x="30" y="30" width="964" height="964" rx="224" fill="url(#g)"/><rect x="204" y="232" width="616" height="554" rx="62" fill="#f8fbff"/><rect x="242" y="270" width="540" height="478" rx="35" fill="#b7d8f6"/><circle cx="623" cy="400" r="68" fill="#fff4c5"/><path d="M242 654L398 436L560 646L657 517L782 685V713Q782 748 747 748H277Q242 748 242 713Z" fill="#427b8c"/><path d="M242 685L431 596L597 695L782 617V713Q782 748 747 748H277Q242 748 242 713Z" fill="#244e73"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<title>LumaView — light frame</title>
+<desc>Original vector artwork: a luminous L frame and a warm beam on a midnight-blue tile.</desc>
+<defs>
+<linearGradient id="tile" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#203b67"/><stop offset=".5" stop-color="#101e3b"/><stop offset="1" stop-color="#070f23"/></linearGradient>
+<linearGradient id="frame" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#c3ffff"/><stop offset=".45" stop-color="#53e8ef"/><stop offset="1" stop-color="#4085ff"/></linearGradient>
+<linearGradient id="beam" x1="0" y1="1" x2="1" y2="0"><stop stop-color="#ff946b"/><stop offset=".55" stop-color="#ffd281"/><stop offset="1" stop-color="#fff5c8"/></linearGradient>
+<radialGradient id="halo" cx=".3" cy=".65" r=".65"><stop stop-color="#138db2" stop-opacity=".25"/><stop offset="1" stop-color="#138db2" stop-opacity="0"/></radialGradient>
+</defs>
+<rect x="32" y="32" width="960" height="960" rx="216" fill="url(#tile)"/>
+<rect x="34" y="34" width="956" height="956" rx="214" fill="url(#halo)" stroke="#91b5df" stroke-opacity=".16" stroke-width="3"/>
+<path d="M311 268V659Q311 713 365 713H748" fill="none" stroke="#06101d" stroke-opacity=".5" stroke-width="112" stroke-linecap="round" transform="translate(0 16)"/>
+<path d="M311 258V649Q311 703 365 703H748" fill="none" stroke="url(#frame)" stroke-width="94" stroke-linecap="round"/>
+<path d="M304 257V642Q304 691 355 691H742" fill="none" stroke="#e0ffff" stroke-opacity=".3" stroke-width="5" stroke-linecap="round"/>
+<path d="M455 287H687Q737 287 737 337V567" fill="none" stroke="#739ed0" stroke-opacity=".24" stroke-width="17" stroke-linecap="round"/>
+<path d="M432 585L509 426L719 276Q741 260 755 275Q769 290 752 313L595 517Z" fill="url(#beam)"/>
+<path d="M432 585L570 473L755 275L595 517Z" fill="#ffb670" fill-opacity=".55"/>
+<circle cx="447" cy="569" r="14" fill="#fff7df"/>
+</svg>

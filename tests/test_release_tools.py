@@ -99,13 +99,29 @@ elif command == ['repo', 'view']:
 elif command == ['repo', 'clone']:
     subprocess.run(['git', 'clone', env['LUMAVIEW_TEST_REMOTE'], args[3]], check=True)
 elif command == ['repo', 'edit']:
-    pass
+    if env.get('LUMAVIEW_TEST_TAG_RACE'):
+        head = subprocess.check_output(['git', '--git-dir', env['LUMAVIEW_TEST_REMOTE'], 'rev-parse', 'main'], text=True).strip()
+        subprocess.run(['git', '--git-dir', env['LUMAVIEW_TEST_REMOTE'], 'update-ref', 'refs/tags/v0.1.2', head], check=True)
 elif args[0] == 'api':
     code = int(env.get('LUMAVIEW_TEST_API_EXIT', '0'))
     if code:
         print('GitHub API unavailable', file=sys.stderr)
         sys.exit(code)
     endpoint = urlsplit(args[1])
+    if endpoint.path == 'repos/test/LumaView/releases':
+        print(env.get('LUMAVIEW_TEST_DRAFT_STATE', 'true'))
+        sys.exit(0)
+    if endpoint.path == 'repos/test/LumaView/actions/runs/123':
+        code = int(env.get('LUMAVIEW_TEST_STATE_API_EXIT', '0'))
+        if code:
+            print('HTTP 502: Server Error', file=sys.stderr)
+            sys.exit(code)
+        status = env.get('LUMAVIEW_TEST_RUN_STATUS', 'completed')
+        default_conclusion = 'failure' if env.get('LUMAVIEW_TEST_BUILD_EXIT') == '1' else 'success'
+        conclusion = env.get('LUMAVIEW_TEST_RUN_CONCLUSION', default_conclusion) if status == 'completed' else None
+        query = args[args.index('--jq') + 1]
+        subprocess.run(['jq', '-r', query], input=json.dumps(dict(status=status, conclusion=conclusion)), text=True, check=True)
+        sys.exit(0)
     assert endpoint.path == 'repos/test/LumaView/actions/runs', args
     sha = parse_qs(endpoint.query)['head_sha'][0]
     def record(run_id, path='.github/workflows/release.yml', branch='v0.1.2', head=sha, event='push'):
@@ -128,6 +144,12 @@ elif command == ['workflow', 'run']:
     (state / 'dispatched').write_text(' '.join(args))
 elif command == ['run', 'watch']:
     assert args[2] == '123', args
+    counter = state / 'watch-count'
+    count = int(counter.read_text()) + 1 if counter.exists() else 1
+    counter.write_text(str(count))
+    if count <= int(env.get('LUMAVIEW_TEST_WATCH_ERRORS', '0')):
+        print('failed to get jobs: HTTP 502: Server Error', file=sys.stderr)
+        sys.exit(1)
     sys.exit(int(env.get('LUMAVIEW_TEST_BUILD_EXIT', '0')))
 elif command == ['release', 'view']:
     if args[args.index('--json') + 1] == 'assets':
@@ -155,9 +177,9 @@ else:
     return source, remote, seed, env, initial
 
 
-def publish(fixture):
+def publish(fixture, *options):
     source, _, _, env, _ = fixture
-    return run('bash', str(source / 'scripts/publish_github.sh'), 'test/LumaView', env=env, check=False)
+    return run('bash', str(source / 'scripts/publish_github.sh'), 'test/LumaView', *options, env=env, check=False)
 
 
 def test_publish_preserves_remote_history_and_retries_without_new_commit(publisher):
@@ -188,7 +210,7 @@ def test_conflicting_tag_stops_before_push(publisher):
 def test_failed_build_does_not_publish(publisher):
     publisher[3]['LUMAVIEW_TEST_BUILD_EXIT'] = '1'
     result = publish(publisher)
-    assert result.returncode != 0 and 'Build failed' in result.stdout
+    assert result.returncode != 0 and "Release workflow ended with 'failure'" in result.stdout
     assert not Path(publisher[3]['LUMAVIEW_TEST_PUBLISHED']).exists()
 
 
@@ -230,3 +252,67 @@ def test_incomplete_assets_do_not_publish(publisher):
     result = publish(publisher)
     assert result.returncode != 0 and 'Missing release asset' in result.stdout
     assert not Path(publisher[3]['LUMAVIEW_TEST_PUBLISHED']).exists()
+
+
+def test_watcher_http_error_does_not_hide_successful_build(publisher):
+    publisher[3]['LUMAVIEW_TEST_WATCH_ERRORS'] = '1'
+    result = publish(publisher)
+    assert result.returncode == 0, result.stdout
+    assert Path(publisher[3]['LUMAVIEW_TEST_PUBLISHED']).exists()
+
+
+def test_watcher_http_error_retries_a_running_build(publisher):
+    publisher[3]['LUMAVIEW_TEST_WATCH_ERRORS'] = '1'
+    publisher[3]['LUMAVIEW_TEST_RUN_STATUS'] = 'in_progress'
+    result = publish(publisher)
+    assert result.returncode == 0, result.stdout
+    published = Path(publisher[3]['LUMAVIEW_TEST_PUBLISHED'])
+    assert published.exists()
+    assert (published.parent / 'watch-count').read_text() == '2'
+
+
+def test_persistent_monitoring_errors_do_not_report_build_failure(publisher):
+    publisher[3]['LUMAVIEW_TEST_WATCH_ERRORS'] = '100'
+    publisher[3]['LUMAVIEW_TEST_STATE_API_EXIT'] = '1'
+    result = publish(publisher)
+    assert result.returncode != 0 and 'Could not confirm the build state' in result.stdout
+    assert 'Build failed' not in result.stdout and 'Release workflow ended' not in result.stdout
+    published = Path(publisher[3]['LUMAVIEW_TEST_PUBLISHED'])
+    assert not published.exists()
+    assert (published.parent / 'watch-count').read_text() == '6'
+
+
+def test_explicit_draft_rebuild_moves_same_tag_and_preserves_history(publisher):
+    _, remote, seed, env, initial = publisher
+    run('git', 'tag', '-a', 'v0.1.2', '-m', 'Draft', cwd=seed, env=env)
+    run('git', 'push', 'origin', 'v0.1.2', cwd=seed, env=env)
+    result = publish(publisher, '--replace-draft-tag')
+    assert result.returncode == 0, result.stdout
+    head = run('git', '--git-dir', str(remote), 'rev-parse', 'main').stdout.strip()
+    target = run('git', '--git-dir', str(remote), 'rev-list', '-n', '1', 'v0.1.2').stdout.strip()
+    assert target == head and head != initial
+    run('git', '--git-dir', str(remote), 'merge-base', '--is-ancestor', initial, head)
+    assert Path(env['LUMAVIEW_TEST_PUBLISHED']).exists()
+
+
+@pytest.mark.parametrize('draft_state', ['false', ''])
+def test_draft_rebuild_rejects_published_or_missing_release(publisher, draft_state):
+    _, remote, seed, env, initial = publisher
+    run('git', 'tag', 'v0.1.2', cwd=seed, env=env)
+    run('git', 'push', 'origin', 'v0.1.2', cwd=seed, env=env)
+    env['LUMAVIEW_TEST_DRAFT_STATE'] = draft_state
+    result = publish(publisher, '--replace-draft-tag')
+    assert result.returncode != 0 and 'requires an existing unpublished draft' in result.stdout
+    assert run('git', '--git-dir', str(remote), 'rev-parse', 'main').stdout.strip() == initial
+    assert run('git', '--git-dir', str(remote), 'rev-parse', 'v0.1.2').stdout.strip() == initial
+
+
+def test_draft_rebuild_does_not_overwrite_a_concurrently_changed_tag(publisher):
+    _, remote, seed, env, initial = publisher
+    run('git', 'tag', '-a', 'v0.1.2', '-m', 'Draft', cwd=seed, env=env)
+    run('git', 'push', 'origin', 'v0.1.2', cwd=seed, env=env)
+    env['LUMAVIEW_TEST_TAG_RACE'] = '1'
+    result = publish(publisher, '--replace-draft-tag')
+    assert result.returncode != 0 and 'stale info' in result.stdout
+    assert run('git', '--git-dir', str(remote), 'rev-parse', 'v0.1.2').stdout.strip() == initial
+    assert not Path(env['LUMAVIEW_TEST_PUBLISHED']).exists()

@@ -3,7 +3,9 @@
 set -euo pipefail
 LUMAVIEW_SOURCE="$(cd -- "$(dirname -- "$0")/.." && pwd)"
 LUMAVIEW_REPO="${1:-}"
+LUMAVIEW_REPLACE_DRAFT="${2:-}"
 die() { printf '\n%s\n' "$*" >&2; exit 1; }
+[[ "$LUMAVIEW_REPLACE_DRAFT" = '' || "$LUMAVIEW_REPLACE_DRAFT" = '--replace-draft-tag' ]] || die 'Unknown option. Use --replace-draft-tag only to rebuild an unpublished draft.'
 [[ "$LUMAVIEW_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die 'Usage: bash scripts/publish_github.sh OWNER/REPOSITORY'
 for tool in git gh rsync; do command -v "$tool" >/dev/null || die "Required command not found: $tool"; done
 git var GIT_AUTHOR_IDENT >/dev/null || die 'Configure your Git user.name and user.email before publishing.'
@@ -55,8 +57,16 @@ if ! git diff --cached --quiet; then
     git commit -m "Release $LUMAVIEW_TAG: image viewer, batch conversion and macOS distribution"
 fi
 LUMAVIEW_COMMIT="$(git rev-parse HEAD)"
+LUMAVIEW_OLD_TAG=""
 if git show-ref --verify --quiet "refs/tags/$LUMAVIEW_TAG"; then
-    [ "$(git rev-list -n 1 "$LUMAVIEW_TAG")" = "$LUMAVIEW_COMMIT" ] || die "Tag $LUMAVIEW_TAG already points to another commit. Nothing was pushed."
+    if [ "$(git rev-list -n 1 "$LUMAVIEW_TAG")" != "$LUMAVIEW_COMMIT" ]; then
+        [ "$LUMAVIEW_REPLACE_DRAFT" = '--replace-draft-tag' ] || die "Tag $LUMAVIEW_TAG already points to another commit. Nothing was pushed."
+        LUMAVIEW_DRAFT_STATE="$(gh api "repos/$LUMAVIEW_REPO/releases" --paginate \
+            --jq ".[] | select(.tag_name == \"$LUMAVIEW_TAG\") | .draft")" || die 'Could not verify the draft release. Nothing was pushed.'
+        [ "$LUMAVIEW_DRAFT_STATE" = true ] || die "Replacing $LUMAVIEW_TAG requires an existing unpublished draft release. Nothing was pushed."
+        LUMAVIEW_OLD_TAG="$(git rev-parse "refs/tags/$LUMAVIEW_TAG")"
+        git tag -f -a "$LUMAVIEW_TAG" -m "LumaView $LUMAVIEW_VERSION"
+    fi
 else
     git tag -a "$LUMAVIEW_TAG" -m "LumaView $LUMAVIEW_VERSION"
 fi
@@ -65,7 +75,11 @@ LUMAVIEW_DESCRIPTION="Image viewer and batch converter for Apple Silicon Macs, i
 gh repo edit "$LUMAVIEW_REPO" --description "$LUMAVIEW_DESCRIPTION"
 # Register the branch/workflows before sending the release tag on a new repository.
 git push -u origin "$LUMAVIEW_BRANCH"
-git push origin "refs/tags/$LUMAVIEW_TAG"
+if [ -n "$LUMAVIEW_OLD_TAG" ]; then
+    git push --force-with-lease="refs/tags/$LUMAVIEW_TAG:$LUMAVIEW_OLD_TAG" origin "refs/tags/$LUMAVIEW_TAG"
+else
+    git push origin "refs/tags/$LUMAVIEW_TAG"
+fi
 
 printf '\nWaiting for the macOS release build…\n'
 LUMAVIEW_RUN=""
@@ -86,9 +100,25 @@ if ! wait_for_release_run 20; then
         die "Could not start the release workflow. Check https://github.com/$LUMAVIEW_REPO/actions and retry this script."
     wait_for_release_run 40 || die "The requested release workflow did not appear. Check https://github.com/$LUMAVIEW_REPO/actions. Sources and tag are already uploaded."
 fi
-if ! gh run watch "$LUMAVIEW_RUN" --repo "$LUMAVIEW_REPO" --exit-status; then
-    die "Build failed; the release was not published. Logs: https://github.com/$LUMAVIEW_REPO/actions/runs/$LUMAVIEW_RUN"
-fi
+LUMAVIEW_MONITOR_ATTEMPT=0
+while ! gh run watch "$LUMAVIEW_RUN" --repo "$LUMAVIEW_REPO" --exit-status; do
+    # A nonzero watcher exit can mean an HTTP error, not a failed build.
+    # Check the run itself without requesting the jobs endpoint again.
+    if LUMAVIEW_RUN_STATE="$(gh api "repos/$LUMAVIEW_REPO/actions/runs/$LUMAVIEW_RUN" \
+        --jq '(.status // "") + ":" + (.conclusion // "")')"; then
+        case "$LUMAVIEW_RUN_STATE" in
+            completed:success) break ;;
+            completed:?*)
+                die "Release workflow ended with '${LUMAVIEW_RUN_STATE#completed:}'; the release was not published. Logs: https://github.com/$LUMAVIEW_REPO/actions/runs/$LUMAVIEW_RUN" ;;
+        esac
+    fi
+    LUMAVIEW_MONITOR_ATTEMPT=$((LUMAVIEW_MONITOR_ATTEMPT + 1))
+    if [ "$LUMAVIEW_MONITOR_ATTEMPT" -ge 6 ]; then
+        die "Could not confirm the build state after repeated monitoring errors. The build may still be running or already complete. Check https://github.com/$LUMAVIEW_REPO/actions/runs/$LUMAVIEW_RUN and retry this script to resume."
+    fi
+    printf '\nGitHub monitoring was interrupted; retrying (%s/6)…\n' "$LUMAVIEW_MONITOR_ATTEMPT"
+    sleep 5
+done
 
 LUMAVIEW_ASSETS="$(gh release view "$LUMAVIEW_TAG" --repo "$LUMAVIEW_REPO" --json assets --jq '.assets[].name')"
 for asset in "LumaView-$LUMAVIEW_VERSION-macos-arm64.dmg" "LumaView-$LUMAVIEW_VERSION-macos-arm64.zip" \

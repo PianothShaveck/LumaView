@@ -15,11 +15,8 @@ from lumaview.ui.advanced import AdvancedDialog
 from lumaview.ui.save_dialog import SaveAsDialog
 from lumaview.model import default_advanced
 assets=ROOT/'assets';assets.mkdir(exist_ok=True)
-svg='''<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024"><defs><linearGradient id="g" x2="1" y2="1"><stop stop-color="#3674ff"/><stop offset="1" stop-color="#153ea9"/></linearGradient></defs><rect x="30" y="30" width="964" height="964" rx="224" fill="url(#g)"/><rect x="204" y="232" width="616" height="554" rx="62" fill="#f8fbff"/><rect x="242" y="270" width="540" height="478" rx="35" fill="#b7d8f6"/><circle cx="623" cy="400" r="68" fill="#fff4c5"/><path d="M242 654L398 436L560 646L657 517L782 685V713Q782 748 747 748H277Q242 748 242 713Z" fill="#427b8c"/><path d="M242 685L431 596L597 695L782 617V713Q782 748 747 748H277Q242 748 242 713Z" fill="#244e73"/></svg>'''
-(assets/'lumaview.svg').write_text(svg)
-app=QApplication.instance() or QApplication([]);app.setOrganizationName('LumaView-QA');app.setApplicationName('Screenshot');apply_style(app)
-qi=QImage(1024,1024,QImage.Format.Format_ARGB32);qi.fill(0);painter=QPainter(qi);QSvgRenderer(svg.encode()).render(painter);painter.end();qi.save(str(assets/'lumaview.png'))
-Image.open(assets/'lumaview.png').save(assets/'lumaview.icns',format='ICNS')
+from build_icon import build_icon
+app=build_icon();app.setOrganizationName('LumaView-QA');app.setApplicationName('Screenshot');apply_style(app)
 samples=ROOT/'samples';samples.mkdir(exist_ok=True)
 w,h=1600,1060;x=np.linspace(0,1,w)[None,:,None];y=np.linspace(0,1,h)[:,None,None]
 base=np.broadcast_to(np.array([186,217,226])*(1-y)+np.array([237,215,170])*y,(h,w,3)).copy();base=base*(1-.05*x)
